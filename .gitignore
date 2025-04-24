@@ -1,0 +1,29 @@
+# ---- Tooling & editors ----
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# ---- C / C++ ----
+# Object & binary files
+*.o
+*.obj
+*.exe
+*.dll
+*.lib
+*.a
+*.so
+# Build folders
+/build/
+/cmake-build-*/
+
+# ---- Node / Next.js ----
+node_modules/
+.next/
+.env.local
+.env.*
+
+# ---- Logs, secrets, misc ----
+*.log
+*.orig
+*.patch

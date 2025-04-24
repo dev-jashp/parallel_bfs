@@ -1,0 +1,52 @@
+[
+  {
+    "graph": "Facebook",
+    "file_name": "facebook_combined.txt",
+    "num_nodes": 4039,
+    "num_edges": 88234,
+    "reference": "https://snap.stanford.edu/data/ego-Facebook.html",
+    "graph_type": "undirected",
+    "category": "social_network",
+    "graph_size": "small"
+  },
+  {
+    "graph": "Wiki-Vote",
+    "file_name": "Wiki-vote.txt",
+    "num_nodes": 7115,
+    "num_edges": 103689,
+    "reference": "https://snap.stanford.edu/data/wiki-Vote.html",
+    "graph_type": "directed",
+    "category": "social_network",
+    "graph_size": "medium"
+  },
+  {
+    "graph": "Google",
+    "file_name": "web-google.txt",
+    "num_nodes": 875713,
+    "num_edges": 5105039,
+    "reference": "https://snap.stanford.edu/data/web-Google.html",
+    "graph_type": "directed",
+    "category": "web_graph",
+    "graph_size": "large"
+  },
+  {
+    "graph": "LiveJournal",
+    "file_name": "com-lj.all.cmty.txt",
+    "num_nodes": 875713,
+    "num_edges": 5105039,
+    "reference": "https://snap.stanford.edu/data/com-LiveJournal.html",
+    "graph_type": "directed",
+    "category": "social_network",
+    "graph_size": "large"
+  },
+  {
+    "graph": "Wikipedia Talk Network",
+    "file_name": "WikiTalk.txt",
+    "num_nodes": 2394385,
+    "num_edges": 5021410,
+    "reference": "https://snap.stanford.edu/data/wiki-Talk.html",
+    "graph_type": "directed",
+    "category": "communication_network",
+    "graph_size": "large"
+  }
+]

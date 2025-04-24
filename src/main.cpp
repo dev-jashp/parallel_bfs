@@ -84,7 +84,11 @@ int main(int argc, char* argv[]) {
 
         std::cout << "Running parallel multi-source BFS\n";
         auto start = std::chrono::high_resolution_clock::now();
-        ParallelBFS::optimized_multi_source(g, dist);
+        // ParallelBFS::optimized(g, 0, dist);
+        // ** For Parallel Bi Directional BFS **
+        // ParallelBFS::optimized_multi_source(g, dist);
+        // ** For Hybrid Parallel BFS, with dynamic Theresolding **
+        ParallelBFS::optimized_hybrid(g, dist);
         auto end = std::chrono::high_resolution_clock::now();
 
         // Count reachable vertices

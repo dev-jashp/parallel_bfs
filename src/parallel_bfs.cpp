@@ -329,4 +329,93 @@ void optimized_multi_source(const Graph& g, std::vector<std::atomic<int>>& dist)
     std::cout << "BFS completed. Total vertices visited: " << total_visited.load() << "\n";
 }
 
+void optimized_hybrid(const Graph& g, std::vector<std::atomic<int>>& dist) {
+    const size_t V = g.vertex_count();
+    const float alpha = g.avg_degree;
+    std::atomic<size_t> total_visited{0};
+    
+    // Phase 1: Fast multi-source initialization
+    #pragma omp parallel
+    {
+        // Find initial sources in parallel
+        std::vector<int> local_sources;
+        #pragma omp for nowait
+        for (size_t i = 0; i < V; ++i) {
+            if (dist[i].load() == INT_MAX && !g.neighbors(i).empty()) {
+                int expected = INT_MAX;
+                if (dist[i].compare_exchange_strong(expected, 0)) {
+                    local_sources.push_back(i);
+                }
+            }
+        }
+        
+        // Process local sources
+        size_t local_count = 0;
+        for (int source : local_sources) {
+            std::queue<int> q;
+            q.push(source);
+            local_count++;
+            
+            while (!q.empty()) {
+                int u = q.front();
+                q.pop();
+                
+                for (int v : g.neighbors(u)) {
+                    int expected = INT_MAX;
+                    if (dist[v].compare_exchange_strong(expected, dist[u].load() + 1)) {
+                        q.push(v);
+                        local_count++;
+                    }
+                }
+            }
+        }
+        total_visited.fetch_add(local_count, std::memory_order_relaxed);
+    }
+    
+    // Phase 2: Handle any remaining components
+    if (total_visited.load() < V) {
+        std::vector<int> remainder;
+        remainder.reserve(V - total_visited.load());
+        
+        #pragma omp parallel for
+        for (int u = 0; u < static_cast<int>(V); ++u) {
+            if (dist[u].load() == INT_MAX && !g.neighbors(u).empty()) {
+                #pragma omp critical
+                remainder.push_back(u);
+            }
+        }
+        
+        #pragma omp parallel
+        {
+            size_t thread_local_count = 0;
+            #pragma omp for nowait
+            for (size_t i = 0; i < remainder.size(); ++i) {
+                int u = remainder[i];
+                int expected = INT_MAX;
+                if (dist[u].compare_exchange_strong(expected, 0)) {
+                    std::queue<int> q;
+                    q.push(u);
+                    thread_local_count++;
+                    
+                    while (!q.empty()) {
+                        int v = q.front();
+                        q.pop();
+                        
+                        for (int w : g.neighbors(v)) {
+                            int expected = INT_MAX;
+                            if (dist[w].compare_exchange_strong(expected, dist[v].load() + 1)) {
+                                q.push(w);
+                                thread_local_count++;
+                            }
+                        }
+                    }
+                }
+            }
+            total_visited.fetch_add(thread_local_count, std::memory_order_relaxed);
+        }
+    }
+    
+    std::cout << "BFS completed. Total vertices visited: " << total_visited.load() << "\n";
+}
+
 } // namespace ParallelBFS

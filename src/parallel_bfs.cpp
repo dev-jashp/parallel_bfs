@@ -20,56 +20,37 @@ std::vector<int> Graph::neighbors(int u) const {
 
 Graph GraphGenerator::from_file(const std::string& filename) {
     std::ifstream file(filename);
-    if (!file.is_open()) {
-        throw std::runtime_error("Could not open file: " + filename);
-    }
+    if (!file.is_open()) throw std::runtime_error("Could not open file: " + filename);
 
-    std::vector<std::pair<int, int>> edge_list;
-    std::unordered_set<int> unique_vertices;
+    // First pass: count edges and find max vertex ID
+    size_t edge_count = 0;
+    int max_vertex = 0;
     int u, v;
-
-    // First pass: collect all unique vertices
     while (file >> u >> v) {
-        edge_list.emplace_back(u, v);
-        unique_vertices.insert(u);
-        unique_vertices.insert(v);
+        edge_count++;
+        max_vertex = std::max({max_vertex, u, v});
     }
 
-    // Create mapping from original IDs to contiguous IDs (0-based)
-    std::unordered_map<int, int> vertex_map;
-    std::vector<int> original_ids;
-    int current_id = 0;
-    for (int vertex : unique_vertices) {
-        vertex_map[vertex] = current_id++;
-        original_ids.push_back(vertex);
-    }
-
-    const size_t V = unique_vertices.size();
-    std::vector<int> offsets(V + 1, 0);
-    std::vector<int> edges;
-    edges.reserve(edge_list.size());
-
-    // Count degrees
-    for (const auto& edge : edge_list) {
-        offsets[vertex_map[edge.first] + 1]++;
-    }
-
-    // Compute offsets (prefix sum)
-    for (size_t i = 1; i <= V; ++i) {
-        offsets[i] += offsets[i - 1];
-    }
-
-    // Sort edges and build adjacency list
-    edges.resize(edge_list.size());
-    std::vector<int> pos(offsets.begin(), offsets.begin() + V);
+    // Second pass: build the graph with memory efficiency
+    file.clear();
+    file.seekg(0);
     
-    for (const auto& edge : edge_list) {
-        edges[pos[vertex_map[edge.first]]++] = vertex_map[edge.second];
+    std::vector<int> offsets(max_vertex + 2, 0); // +2 for 1-based indexing and sentinel
+    std::vector<int> edges;
+    edges.reserve(edge_count);
+
+    while (file >> u >> v) {
+        offsets[u+1]++; // Count degrees
+        edges.push_back(v);
+    }
+
+    // Prefix sum to get offsets
+    for (size_t i = 1; i < offsets.size(); ++i) {
+        offsets[i] += offsets[i-1];
     }
 
     return Graph(std::move(offsets), std::move(edges));
 }
-
 // Parallel BFS implementations
 namespace ParallelBFS {
 
@@ -213,53 +194,42 @@ void validate_graph_structure(const Graph& g) {
 void optimized_multi_source(const Graph& g, std::vector<std::atomic<int>>& dist) {
     const size_t V = g.vertex_count();
     std::atomic<size_t> total_visited{0};
-    std::atomic<bool> found_source{true};
     
     #pragma omp parallel
     {
-        while (found_source.load()) {
-            // Find next unvisited source
-            int source = -1;
-            #pragma omp for schedule(static) nowait
-            for (size_t i = 0; i < V; ++i) {
-                if (source == -1 && dist[i].load() == INT_MAX && !g.neighbors(i).empty()) {
-                    int expected = INT_MAX;
-                    if (dist[i].compare_exchange_strong(expected, 0)) {
-                        source = i;
-                    }
-                }
+        std::vector<int> local_sources;
+        
+        // First find all potential sources in parallel
+        #pragma omp for schedule(static)
+        for (size_t i = 0; i < V; ++i) {
+            if (dist[i].load() == INT_MAX && !g.neighbors(i).empty()) {
+                local_sources.push_back(i);
             }
-            
-            if (source == -1) {
-                if (omp_get_thread_num() == 0) {
-                    found_source.store(false);
-                }
-                continue;
-            }
-            
-            // Local BFS from this source
-            std::queue<int> q;
-            q.push(source);
-            size_t local_visited = 1;
-            
-            while (!q.empty()) {
-                int u = q.front();
-                q.pop();
+        }
+        
+        // Process each potential source
+        for (int source : local_sources) {
+            int expected = INT_MAX;
+            if (dist[source].compare_exchange_strong(expected, 0)) {
+                // Local BFS
+                std::queue<int> q;
+                q.push(source);
+                size_t local_visited = 1;
                 
-                for (int v : g.neighbors(u)) {
-                    int expected = INT_MAX;
-                    if (dist[v].compare_exchange_strong(expected, dist[u].load() + 1)) {
-                        q.push(v);
-                        local_visited++;
+                while (!q.empty()) {
+                    int u = q.front();
+                    q.pop();
+                    
+                    for (int v : g.neighbors(u)) {
+                        int expected = INT_MAX;
+                        if (dist[v].compare_exchange_strong(expected, dist[u].load() + 1)) {
+                            q.push(v);
+                            local_visited++;
+                        }
                     }
                 }
-            }
-            
-            total_visited.fetch_add(local_visited, std::memory_order_relaxed);
-            
-            // Early exit if all vertices visited
-            if (total_visited.load() >= V) {
-                found_source.store(false);
+                
+                total_visited.fetch_add(local_visited, std::memory_order_relaxed);
             }
         }
     }

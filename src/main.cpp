@@ -3,7 +3,8 @@
 #include <chrono>
 #include <algorithm>
 #include <string>
-#include <climits>  // Add this for INT_MAX
+#include <climits>
+#include <omp.h>  // Add this for INT_MAX
 
 void print_usage() {
     std::cout << "Usage: ./parallel_bfs [vertices=1000] [density=0.01] [seed=42]\n"
@@ -74,7 +75,6 @@ int main(int argc, char* argv[]) {
                   << "  Edges:    " << g.edge_count() << "\n"
                   << "  Avg deg:  " << g.avg_degree << "\n";
 
-        // Select source with maximum degree in first 1000 vertices
         std::vector<std::atomic<int>> dist(g.vertex_count());
         for (auto& d : dist) d.store(INT_MAX);
 
@@ -91,9 +91,10 @@ int main(int argc, char* argv[]) {
         }
 
         std::cout << "\nFinal Results:\n"
-                  << "  Time:       " << std::chrono::duration<double>(end - start).count() << " s\n"
-                  << "  Throughput: " << (g.edge_count() / std::chrono::duration<double>(end - start).count() / 1e6) << " M edges/s\n"
-                  << "  Reachable:  " << reachable << "/" << g.vertex_count() << " vertices\n";
+                << "  Time:       " << std::chrono::duration<double>(end - start).count() << " s\n"
+                << "  Throughput: " << (g.edge_count() / std::chrono::duration<double>(end - start).count() / 1e6) << " M edges/s\n"
+                << "  Reachable:  " << reachable << "/" << g.vertex_count() << " vertices\n";
+          
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;

@@ -92,109 +92,121 @@ void optimized_hybrid(const Graph& g, std::vector<std::atomic<int>>& dist) {
     const size_t V = g.vertex_count();
     const float alpha = g.avg_degree;
 
-    // Reset distances
-    #pragma omp parallel for
-    for (size_t i = 0; i < V; ++i)
-        dist[i].store(INT_MAX);
+    // Raw pointers to avoid vector copies
+    const int* off = g.offsets.data();
+    const int* ed  = g.edges.data();
 
-    // Build initial frontier = all non‐isolated vertices
+    // 1) Reset distances
+    #pragma omp parallel for schedule(static)
+    for (size_t u = 0; u < V; ++u) {
+        dist[u].store(INT_MAX);
+    }
+
+    // 2) Build initial frontier = all non-isolated vertices
     std::vector<int> frontier;
     frontier.reserve(V);
     for (size_t u = 0; u < V; ++u) {
-        if (g.offsets[u] < g.offsets[u+1]) {
+        if (off[u] < off[u+1]) {
             dist[u].store(0);
             frontier.push_back((int)u);
         }
     }
     size_t total_visited = frontier.size();
 
+    // remainder will hold the unvisited vertices
     std::vector<int> remainder;
-    bool remainder_initialized = false;
+    remainder.reserve(V);
+    bool rem_init = false;
     int iteration = 0;
 
+    // 3) Main loop
     while (!frontier.empty()) {
         std::vector<int> next;
         size_t work_est = frontier.size() * alpha;
-        bool use_bottom_up = false;
-        if (remainder_initialized) {
-            use_bottom_up = (work_est > remainder.size()) ||
-                            (iteration > 10 && frontier.size() < 100);
+
+        // Decide top-down vs bottom-up
+        bool bottom_up = false;
+        if (rem_init) {
+            bottom_up = (work_est > remainder.size())
+                     || (iteration > 10 && frontier.size() < 100);
         }
 
-        if (use_bottom_up) {
-            // BOTTOM‐UP: scan remainder
+        if (bottom_up) {
+            // — BOTTOM-UP: scan remainder for any neighbor in frontier —
             next.reserve(remainder.size());
             #pragma omp parallel
             {
-                std::vector<int> priv;
+                std::vector<int> local;
                 #pragma omp for schedule(dynamic,32) nowait
                 for (size_t i = 0; i < remainder.size(); ++i) {
                     int u = remainder[i];
-                    for (int v : g.neighbors(u)) {
+                    // scan u’s adjacency list
+                    for (int ei = off[u]; ei < off[u+1]; ++ei) {
+                        int v = ed[ei];
                         if (dist[v].load() != INT_MAX) {
                             int nd = dist[v].load() + 1;
                             int exp = INT_MAX;
+                            // first thread to claim u wins
                             if (dist[u].compare_exchange_strong(exp, nd)) {
-                                priv.push_back(u);
+                                local.push_back(u);
                                 break;
                             }
                         }
                     }
                 }
                 #pragma omp critical
-                next.insert(next.end(), priv.begin(), priv.end());
+                next.insert(next.end(), local.begin(), local.end());
             }
-            // rebuild remainder
-            std::vector<int> new_rem;
-            new_rem.reserve(remainder.size());
-            for (int u : remainder)
-                if (dist[u].load() == INT_MAX)
-                    new_rem.push_back(u);
-            remainder.swap(new_rem);
+            // rebuild remainder in one shot
+            remainder.clear();
+            for (size_t u = 0; u < V; ++u) {
+                if (dist[u].load() == INT_MAX) 
+                    remainder.push_back((int)u);
+            }
+            rem_init = true;
 
         } else {
-            // TOP‐DOWN: expand frontier
-            if (!remainder_initialized && work_est > V/4) {
-                remainder.reserve(V - frontier.size());
-                #pragma omp parallel for schedule(static)
-                for (size_t u = 0; u < V; ++u)
+            // — TOP-DOWN: expand from frontier into unvisited neighbors —
+            if (!rem_init && work_est > V/4) {
+                // first time we need remainder
+                remainder.clear();
+                for (size_t u = 0; u < V; ++u) {
                     if (dist[u].load() == INT_MAX)
-                        #pragma omp critical
                         remainder.push_back((int)u);
-                remainder_initialized = true;
+                }
+                rem_init = true;
             }
 
             next.reserve(work_est);
             #pragma omp parallel
             {
-                std::vector<int> priv;
+                std::vector<int> local;
                 #pragma omp for schedule(static,4) nowait
                 for (size_t i = 0; i < frontier.size(); ++i) {
                     int u = frontier[i];
-                    int d = dist[u].load();
-                    for (int v : g.neighbors(u)) {
+                    int du = dist[u].load();
+                    // for each neighbor v of u
+                    for (int ei = off[u]; ei < off[u+1]; ++ei) {
+                        int v = ed[ei];
                         int exp = INT_MAX;
-                        if (dist[v].compare_exchange_strong(exp, d+1))
-                            priv.push_back(v);
+                        if (dist[v].compare_exchange_strong(exp, du + 1)) {
+                            local.push_back(v);
+                        }
                     }
                 }
                 #pragma omp critical
-                next.insert(next.end(), priv.begin(), priv.end());
+                next.insert(next.end(), local.begin(), local.end());
             }
         }
 
-        // dedupe + count
-        if (!next.empty()) {
-            std::sort(next.begin(), next.end());
-            next.erase(std::unique(next.begin(), next.end()), next.end());
-            total_visited += next.size();
-        }
+        // update counts & advance
+        total_visited += next.size();
         frontier.swap(next);
         iteration++;
 
         if (iteration % 10 == 0) {
             std::cout << "Iteration " << iteration
-                      << ": Mode=" << (use_bottom_up ? "BOTTOM-UP" : "TOP-DOWN")
+                      << ": Mode=" << (bottom_up ? "BOTTOM-UP" : "TOP-DOWN")
                       << ", Frontier=" << frontier.size()
                       << ", Remainder=" << remainder.size()
                       << ", Visited=" << total_visited << "\n";

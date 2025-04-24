@@ -3,7 +3,8 @@
 #include <chrono>
 #include <algorithm>
 #include <string>
-#include <climits>  // Add this for INT_MAX
+#include <climits>   // For INT_MAX
+#include <omp.h>     // For OpenMP
 
 void print_usage() {
     std::cout << "Usage: ./parallel_bfs [vertices=1000] [density=0.01] [seed=42]\n"
@@ -17,6 +18,9 @@ void print_usage() {
 }
 
 int main(int argc, char* argv[]) {
+    // Use all available cores
+    omp_set_num_threads(omp_get_max_threads());
+
     // Default safe values
     size_t V = 1000;
     float density = 0.01f;
@@ -26,7 +30,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "With Dynamic Switching\n"
               << "========================\n"
-              << "Parallel BFS with dynamic switching between top-down and bottom-up approaches.\n\n";
+              << "Hybrid frontier-based multi-source BFS\n\n";
 
     // Parse command-line arguments
     if (argc > 1) {
@@ -35,7 +39,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         
-        // Check if argument is a file (ends with .txt)
+        // File?
         std::string first_arg = argv[1];
         if (first_arg.size() >= 4 && first_arg.substr(first_arg.size() - 4) == ".txt") {
             graph_file = first_arg;
@@ -54,58 +58,46 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        // Initialize graph based on input
-        Graph g = from_file ? GraphGenerator::from_file(graph_file) 
-                           : GraphGenerator::random(V, density, seed);
+        // Build graph
+        Graph g = from_file
+                  ? GraphGenerator::from_file(graph_file)
+                  : GraphGenerator::random(V, density, seed);
 
-        // Safety check for synthetic graph
         if (!from_file && V > 10000) {
-            std::cout << "Warning: Large graph size (" << V << " vertices). Continue? (y/n): ";
-            char response;
-            std::cin >> response;
-            if (response != 'y' && response != 'Y') return 0;
-        }
-        
-        if (!from_file) {
-            std::cout << "Generating synthetic graph with:\n"
-                      << "  Vertices: " << V << "\n"
-                      << "  Density:  " << density << "\n"
-                      << "  Seed:     " << seed << "\n";
+            std::cout << "Warning: Large graph (" << V << " vertices). Continue? (y/n): ";
+            char resp; std::cin >> resp;
+            if (resp != 'y' && resp != 'Y') return 0;
         }
 
         std::cout << "Graph stats:\n"
                   << "  Vertices: " << g.vertex_count() << "\n"
-                  << "  Edges:    " << g.edge_count() << "\n"
-                  << "  Avg deg:  " << g.avg_degree << "\n";
+                  << "  Edges:    " << g.edge_count()   << "\n"
+                  << "  Avg deg:  " << g.avg_degree     << "\n\n";
 
-        // Select source with maximum degree in first 1000 vertices
+        // Distance array (will be initialized inside optimized_hybrid)
         std::vector<std::atomic<int>> dist(g.vertex_count());
-        for (auto& d : dist) d.store(INT_MAX);
 
-        std::cout << "Running parallel multi-source BFS\n";
+        std::cout << "Running hybrid frontier-based multi-source BFS\n";
         auto start = std::chrono::high_resolution_clock::now();
-        // ParallelBFS::optimized(g, 0, dist);
-        // ** For Parallel Bi Directional BFS **
-        // ParallelBFS::optimized_multi_source(g, dist);
-        // ** For Hybrid Parallel BFS, with dynamic Theresolding **
         ParallelBFS::optimized_hybrid(g, dist);
-        auto end = std::chrono::high_resolution_clock::now();
+        auto end   = std::chrono::high_resolution_clock::now();
 
-        // Count reachable vertices
+        // Count how many got visited
         size_t reachable = 0;
         #pragma omp parallel for reduction(+:reachable)
-        for (size_t i = 0; i < dist.size(); ++i) {
-            if (dist[i].load() != INT_MAX) reachable++;
-        }
+        for (size_t i = 0; i < dist.size(); ++i)
+            if (dist[i].load() != INT_MAX)
+                ++reachable;
 
+        double sec = std::chrono::duration<double>(end - start).count();
         std::cout << "\nFinal Results:\n"
-                  << "  Time:       " << std::chrono::duration<double>(end - start).count() << " s\n"
-                  << "  Throughput: " << (g.edge_count() / std::chrono::duration<double>(end - start).count() / 1e6) << " M edges/s\n"
+                  << "  Time:       " << sec << " s\n"
+                  << "  Throughput: " << (g.edge_count() / sec / 1e6) << " M edges/s\n"
                   << "  Reachable:  " << reachable << "/" << g.vertex_count() << " vertices\n";
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
-    
+
     return 0;
 }

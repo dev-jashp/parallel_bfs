@@ -24,6 +24,10 @@ int main(int argc, char* argv[]) {
     std::string graph_file;
     bool from_file = false;
 
+    std::cout << "With Dynamic Switching\n"
+              << "========================\n"
+              << "Parallel BFS with dynamic switching between top-down and bottom-up approaches.\n\n";
+
     // Parse command-line arguments
     if (argc > 1) {
         if (std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help") {

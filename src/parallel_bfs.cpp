@@ -75,6 +75,7 @@ namespace ParallelBFS {
 
 void optimized(const Graph& g, int source, std::vector<std::atomic<int>>& dist) {
     const size_t V = g.vertex_count();
+    const float alpha = g.avg_degree;  // Average degree
     
     // Initialize distances
     #pragma omp parallel for
@@ -84,38 +85,98 @@ void optimized(const Graph& g, int source, std::vector<std::atomic<int>>& dist) 
     dist[source].store(0);
     
     std::vector<int> current_frontier = {source};
-    std::atomic<size_t> total_visited{1};
+    std::vector<int> remainder;
+    bool remainder_initialized = false;
+    size_t total_visited = 1;
     int iteration = 0;
     
     while (!current_frontier.empty()) {
         std::vector<int> next_frontier;
-        next_frontier.reserve(current_frontier.size() * g.avg_degree);
+        size_t estimated_work = current_frontier.size() * alpha;
         
-        #pragma omp parallel
-        {
-            std::vector<int> private_next;
-            #pragma omp for nowait
-            for (size_t i = 0; i < current_frontier.size(); ++i) {
-                int u = current_frontier[i];
-                int current_dist = dist[u].load();
-                
-                for (int v : g.neighbors(u)) {
-                    int expected = INT_MAX;
-                    if (dist[v].compare_exchange_strong(expected, current_dist + 1)) {
-                        private_next.push_back(v);
-                        total_visited++; // Increment using atomic<size_t>
+        // Dynamic switching condition
+        bool use_bottom_up = remainder_initialized && 
+                            (estimated_work > remainder.size() || 
+                            (iteration > 10 && current_frontier.size() < 100));
+        
+        if (use_bottom_up) {
+            // Bottom-up phase
+            next_frontier.reserve(remainder.size());
+            
+            #pragma omp parallel
+            {
+                std::vector<int> private_next;
+                #pragma omp for schedule(dynamic, 32) nowait
+                for (size_t i = 0; i < remainder.size(); ++i) {
+                    int u = remainder[i];
+                    bool found = false;
+                    for (int v : g.neighbors(u)) {
+                        if (dist[v].load() != INT_MAX) {
+                            int new_dist = dist[v].load() + 1;
+                            int expected = INT_MAX;
+                            if (dist[u].compare_exchange_strong(expected, new_dist)) {
+                                private_next.push_back(u);
+                                found = true;
+                                break;
+                            }
+                        }
                     }
                 }
+                
+                #pragma omp critical
+                next_frontier.insert(next_frontier.end(), private_next.begin(), private_next.end());
             }
             
-            #pragma omp critical
-            next_frontier.insert(next_frontier.end(), private_next.begin(), private_next.end());
+            // Update remainder
+            std::vector<int> new_remainder;
+            new_remainder.reserve(remainder.size());
+            for (int u : remainder) {
+                if (dist[u].load() == INT_MAX) {
+                    new_remainder.push_back(u);
+                }
+            }
+            remainder = std::move(new_remainder);
+        } else {
+            // Top-down phase
+            if (!remainder_initialized && estimated_work > V/4) {
+                remainder.reserve(V - current_frontier.size());
+                #pragma omp parallel for
+                for (int u = 0; u < static_cast<int>(V); ++u) {
+                    if (dist[u].load() == INT_MAX) {
+                        #pragma omp critical
+                        remainder.push_back(u);
+                    }
+                }
+                remainder_initialized = true;
+            }
+            
+            next_frontier.reserve(estimated_work);
+            
+            #pragma omp parallel
+            {
+                std::vector<int> private_next;
+                #pragma omp for schedule(static, 4) nowait
+                for (size_t i = 0; i < current_frontier.size(); ++i) {
+                    int u = current_frontier[i];
+                    int current_dist = dist[u].load();
+                    for (int v : g.neighbors(u)) {
+                        int expected = INT_MAX;
+                        if (dist[v].compare_exchange_strong(expected, current_dist + 1)) {
+                            private_next.push_back(v);
+                        }
+                    }
+                }
+                
+                #pragma omp critical
+                next_frontier.insert(next_frontier.end(), private_next.begin(), private_next.end());
+            }
         }
         
-        // Remove duplicates efficiently
+        // Remove duplicates
         if (!next_frontier.empty()) {
             std::sort(next_frontier.begin(), next_frontier.end());
             next_frontier.erase(std::unique(next_frontier.begin(), next_frontier.end()), next_frontier.end());
+            total_visited += next_frontier.size();
         }
         
         current_frontier = std::move(next_frontier);
@@ -124,15 +185,16 @@ void optimized(const Graph& g, int source, std::vector<std::atomic<int>>& dist) 
         // Progress reporting
         if (iteration % 10 == 0) {
             std::cout << "Iteration " << iteration 
-                      << ": Frontier=" << current_frontier.size()
-                      << ", Visited=" << total_visited << "\n";
+                        << ": Mode=" << (use_bottom_up ? "BOTTOM-UP" : "TOP-DOWN")
+                        << ", Frontier=" << current_frontier.size() 
+                        << ", Remainder=" << remainder.size()
+                        << ", Visited=" << total_visited << "\n";
         }
     }
     
     std::cout << "BFS completed in " << iteration << " iterations. "
-              << "Total vertices visited: " << total_visited << "\n";
+                << "Total vertices visited: " << total_visited << "\n";
 }
-    
 
 void baseline(const Graph& g, int source, std::vector<std::atomic<int>>& dist) {
     for (auto& d : dist) d.store(INT_MAX);

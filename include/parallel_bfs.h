@@ -52,6 +52,7 @@ namespace ParallelBFS {
     // Utility functions
     bool validate_result(const Graph& g, int source, const std::vector<std::atomic<int>>& dist);
     std::vector<int> get_distances(const std::vector<std::atomic<int>>& dist);
+    void optimized_multi_source(const Graph& g, std::vector<std::atomic<int>>& dist);
 }
 
 // Implementation of graph generators

@@ -74,38 +74,26 @@ int main(int argc, char* argv[]) {
                   << "  Edges:    " << g.edge_count() << "\n"
                   << "  Avg deg:  " << g.avg_degree << "\n";
 
-        // Prepare distance array
+        // Select source with maximum degree in first 1000 vertices
         std::vector<std::atomic<int>> dist(g.vertex_count());
-        
-        // Initialize distances
-        for (auto& d : dist) {
-            d.store(INT_MAX);
-        }
+        for (auto& d : dist) d.store(INT_MAX);
 
-        // Find the first vertex with outgoing edges as source
-        int source = 0;
-        for (size_t i = 0; i < g.vertex_count(); ++i) {
-            if (!g.neighbors(i).empty()) {
-                source = i;
-                break;
-            }
-        }
-
-        std::cout << "Running BFS from source vertex \n";
+        std::cout << "Running parallel multi-source BFS\n";
         auto start = std::chrono::high_resolution_clock::now();
-        ParallelBFS::optimized(g, 0, dist);
+        ParallelBFS::optimized_multi_source(g, dist);
         auto end = std::chrono::high_resolution_clock::now();
 
-        // Results
-        std::chrono::duration<double> elapsed = end - start;
-        size_t reachable = std::count_if(dist.begin(), dist.end(),
-            [](const std::atomic<int>& d) { return d.load() != INT_MAX; });
+        // Count reachable vertices
+        size_t reachable = 0;
+        #pragma omp parallel for reduction(+:reachable)
+        for (size_t i = 0; i < dist.size(); ++i) {
+            if (dist[i].load() != INT_MAX) reachable++;
+        }
 
-        std::cout << "\nResults:\n"
-                  << "  Time:      " << elapsed.count() << " s\n"
-                  << "  Throughput: " << (g.edge_count() / elapsed.count() / 1e6) << " M edges/s\n"
-                  << "  Reachable: " << reachable << "/" << g.vertex_count() << " vertices\n";
-
+        std::cout << "\nFinal Results:\n"
+                  << "  Time:       " << std::chrono::duration<double>(end - start).count() << " s\n"
+                  << "  Throughput: " << (g.edge_count() / std::chrono::duration<double>(end - start).count() / 1e6) << " M edges/s\n"
+                  << "  Reachable:  " << reachable << "/" << g.vertex_count() << " vertices\n";
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;

@@ -8,6 +8,7 @@
 #include <queue>
 #include <stdexcept>
 #include <unordered_set>
+#include <mutex> // Include mutex for thread safety
 
 // Graph member function implementations
 std::vector<int> Graph::neighbors(int u) const {
@@ -83,11 +84,12 @@ void optimized(const Graph& g, int source, std::vector<std::atomic<int>>& dist) 
     dist[source].store(0);
     
     std::vector<int> current_frontier = {source};
-    size_t total_visited = 1;
+    std::atomic<size_t> total_visited{1};
+    int iteration = 0;
     
     while (!current_frontier.empty()) {
         std::vector<int> next_frontier;
-        next_frontier.reserve(current_frontier.size() * 2);
+        next_frontier.reserve(current_frontier.size() * g.avg_degree);
         
         #pragma omp parallel
         {
@@ -101,8 +103,7 @@ void optimized(const Graph& g, int source, std::vector<std::atomic<int>>& dist) 
                     int expected = INT_MAX;
                     if (dist[v].compare_exchange_strong(expected, current_dist + 1)) {
                         private_next.push_back(v);
-                        #pragma omp atomic
-                        total_visited++;
+                        total_visited++; // Increment using atomic<size_t>
                     }
                 }
             }
@@ -111,13 +112,27 @@ void optimized(const Graph& g, int source, std::vector<std::atomic<int>>& dist) 
             next_frontier.insert(next_frontier.end(), private_next.begin(), private_next.end());
         }
         
-        std::cout << "Frontier: " << current_frontier.size() 
-                  << " vertices | Total visited: " << total_visited << "\n";
+        // Remove duplicates efficiently
+        if (!next_frontier.empty()) {
+            std::sort(next_frontier.begin(), next_frontier.end());
+            next_frontier.erase(std::unique(next_frontier.begin(), next_frontier.end()), next_frontier.end());
+        }
+        
         current_frontier = std::move(next_frontier);
+        iteration++;
+        
+        // Progress reporting
+        if (iteration % 10 == 0) {
+            std::cout << "Iteration " << iteration 
+                      << ": Frontier=" << current_frontier.size()
+                      << ", Visited=" << total_visited << "\n";
+        }
     }
     
-    std::cout << "BFS completed. Total vertices visited: " << total_visited << "\n";
+    std::cout << "BFS completed in " << iteration << " iterations. "
+              << "Total vertices visited: " << total_visited << "\n";
 }
+    
 
 void baseline(const Graph& g, int source, std::vector<std::atomic<int>>& dist) {
     for (auto& d : dist) d.store(INT_MAX);
@@ -193,6 +208,63 @@ void validate_graph_structure(const Graph& g) {
         }
     }
     std::cout << "Invalid edge targets found: " << invalid_edges << "\n";
+}
+
+void optimized_multi_source(const Graph& g, std::vector<std::atomic<int>>& dist) {
+    const size_t V = g.vertex_count();
+    std::atomic<size_t> total_visited{0};
+    std::atomic<bool> found_source{true};
+    
+    #pragma omp parallel
+    {
+        while (found_source.load()) {
+            // Find next unvisited source
+            int source = -1;
+            #pragma omp for schedule(static) nowait
+            for (size_t i = 0; i < V; ++i) {
+                if (source == -1 && dist[i].load() == INT_MAX && !g.neighbors(i).empty()) {
+                    int expected = INT_MAX;
+                    if (dist[i].compare_exchange_strong(expected, 0)) {
+                        source = i;
+                    }
+                }
+            }
+            
+            if (source == -1) {
+                if (omp_get_thread_num() == 0) {
+                    found_source.store(false);
+                }
+                continue;
+            }
+            
+            // Local BFS from this source
+            std::queue<int> q;
+            q.push(source);
+            size_t local_visited = 1;
+            
+            while (!q.empty()) {
+                int u = q.front();
+                q.pop();
+                
+                for (int v : g.neighbors(u)) {
+                    int expected = INT_MAX;
+                    if (dist[v].compare_exchange_strong(expected, dist[u].load() + 1)) {
+                        q.push(v);
+                        local_visited++;
+                    }
+                }
+            }
+            
+            total_visited.fetch_add(local_visited, std::memory_order_relaxed);
+            
+            // Early exit if all vertices visited
+            if (total_visited.load() >= V) {
+                found_source.store(false);
+            }
+        }
+    }
+    
+    std::cout << "BFS completed. Total vertices visited: " << total_visited.load() << "\n";
 }
 
 } // namespace ParallelBFS

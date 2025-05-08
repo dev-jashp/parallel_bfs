@@ -19,7 +19,9 @@ void print_usage() {
 
 int main(int argc, char* argv[]) {
     // Use all available cores
-    omp_set_num_threads(omp_get_max_threads());
+
+    // omp_set_num_threads(4);
+    omp_set_num_threads(omp_get_max_threads());// maximum number of threads
 
     // Default safe values
     size_t V = 1000;

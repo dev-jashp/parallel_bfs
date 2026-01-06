@@ -23,9 +23,7 @@ std::vector<int> Graph::neighbors(int u) const {
 // ——— GraphGenerator::from_file ———
 Graph GraphGenerator::from_file(const std::string& filename) {
     std::ifstream file(filename);
-    if (!file.is_open()) {
-        throw std::runtime_error("Could not open file: " + filename);
-    }
+    if (!file.is_open()) throw std::runtime_error("Could not open file: " + filename);
 
     std::vector<std::pair<int,int>> edge_list;
     std::unordered_set<int> unique_vertices;

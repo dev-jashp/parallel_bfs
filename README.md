@@ -71,4 +71,13 @@ cmake --build . --clean-first
 
 ## 🛠️ Project Structure
 - `src/`: Core implementation of the BFS algorithms.
-- 
+- `include/`: Header files for Graph and BFS classes.
+- `graphs/`: Directory containing real-world datasets (e.g., WikiTalk.txt).
+- `bin/`: Output directory for compiled executables.
+
+## 👥 Contributors
+1. Jash Patel
+2. Hitesh Avula
+3. Sai Katari
+4. Nirupam Dashika
+5. Viswanada Reddy
